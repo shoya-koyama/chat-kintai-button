@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Chat Work Helper",
+  "version": "1.0",
+  "permissions": ["storage"],
+  "content_scripts": [
+    {
+      "matches": ["https://mail.google.com/chat/*", "https://chat.google.com/*"],
+      "js": ["content.js"]
+    }
+  ],
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  }
+}
