@@ -10,9 +10,28 @@ let config = {
 let currentStatus = "out";
 
 // ストレージから設定と現在の状態を読み込む
-chrome.storage.local.get(['spaceName', 'inMessage', 'outMessage', 'remoteInMessage', 'remoteOutMessage', 'currentStatus'], (items) => {
+chrome.storage.local.get(['spaceName', 'inMessage', 'outMessage', 'remoteInMessage', 'remoteOutMessage', 'currentStatus', 'currentStatusDate', 'lastAction', 'lastRemoteAction'], (items) => {
   Object.assign(config, items);
-  if (items.currentStatus) currentStatus = items.currentStatus;
+  // helper: today's local date string YYYY-MM-DD
+  const now = new Date();
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+
+  if (items.currentStatus) {
+    // If stored status is 'in' but it was set on a previous date, reset to 'out' so the start buttons are usable
+    if (items.currentStatus === 'in' && items.currentStatusDate && items.currentStatusDate !== todayStr) {
+      currentStatus = 'out';
+      // persist the reset so UI remains consistent
+      chrome.storage.local.set({ currentStatus: currentStatus, currentStatusDate: todayStr });
+    } else {
+      currentStatus = items.currentStatus;
+    }
+  } else if (items.lastAction || items.lastRemoteAction) {
+    // Backwards compatibility: if either previous flag was 'in', treat as 'in'
+    if (items.lastAction === 'in' || items.lastRemoteAction === 'in') currentStatus = 'in';
+    else currentStatus = 'out';
+    // Persist derived value so next time we read currentStatus directly
+    chrome.storage.local.set({ currentStatus: currentStatus, currentStatusDate: todayStr });
+  }
   updateButtonUI();
 });
 
@@ -106,7 +125,10 @@ async function handleAction(type) {
   sendMessage(sendText);
   
   // 状態を保存してUIを更新
-  chrome.storage.local.set({ currentStatus: currentStatus });
+  // also save the date when status was set so we can reset on the next day
+  const now = new Date();
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+  chrome.storage.local.set({ currentStatus: currentStatus, currentStatusDate: todayStr });
   updateButtonUI();
 }
 
@@ -116,33 +138,48 @@ function sendMessage(text) {
 
   input.focus();
 
-  // 現在の選択範囲（カーソル位置）を取得
+  // helper: check if node is a descendant of parent
+  function isDescendant(parent, node) {
+    while (node) {
+      if (node === parent) return true;
+      node = node.parentNode;
+    }
+    return false;
+  }
+
   const selection = window.getSelection();
-  if (!selection.rangeCount) return;
+  let range;
+  // If there's no selection or the selection is not inside the input,
+  // create a collapsed range at the end of the input
+  if (!selection.rangeCount || !isDescendant(input, selection.anchorNode)) {
+    range = document.createRange();
+    range.selectNodeContents(input);
+    range.collapse(false); // collapse to end
+  } else {
+    range = selection.getRangeAt(0);
+  }
 
-  const range = selection.getRangeAt(0);
-  
-  // 1. カーソル位置にある既存のテキストを削除（必要なら）
+  // Replace content at the range with our text
   range.deleteContents();
-
-  // 2. 新しいテキストノードを作成して挿入
   const textNode = document.createTextNode(text);
   range.insertNode(textNode);
-
-  // 3. カーソルを挿入したテキストの直後に移動させる
   range.setStartAfter(textNode);
   range.setEndAfter(textNode);
+
   selection.removeAllRanges();
   selection.addRange(range);
 
-  // 4. Google Chat側に「入力されたこと」を通知するイベントを発火
+  // Notify the page that input changed
   input.dispatchEvent(new InputEvent('input', { bubbles: true }));
 
-  // 送信処理（Enterキーのシミュレート）
-  setTimeout(() => {
+  // Try dispatching Enter immediately, then retry once after 200ms
+  const sendEnter = () => {
     const enter = new KeyboardEvent('keydown', {
-      bubbles: true, cancelable: true, keyCode: 13, key: 'Enter'
+      bubbles: true, cancelable: true, keyCode: 13, key: 'Enter', code: 'Enter'
     });
     input.dispatchEvent(enter);
-  }, 200);
+  };
+
+  sendEnter();
+  setTimeout(sendEnter, 200);
 }
